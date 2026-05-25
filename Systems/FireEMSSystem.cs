@@ -179,6 +179,11 @@ namespace FireEMS.Systems
                 Execute(in chunk, unfilteredChunkIndex, useEnabledMask, in chunkEnabledMask);
             }
 
+            void IJobChunk.Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 chunkEnabledMask)
+            {
+                Execute(in chunk, unfilteredChunkIndex, useEnabledMask, in chunkEnabledMask);
+            }
+
             public void Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 enabledMask)
             {
                 NativeArray<Entity>                entities         = chunk.GetNativeArray(m_EntityType);
