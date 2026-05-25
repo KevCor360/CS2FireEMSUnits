@@ -3,15 +3,17 @@ using Game;
 using Game.Buildings;
 using Game.Common;
 using Game.Events;
-using Game.Healthcare;
 using Game.Objects;
+using Game.Prefabs;
 using Game.Simulation;
 using Game.Vehicles;
 using System.Runtime.CompilerServices;
 using Unity.Burst;
+using Unity.Burst.Intrinsics;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
+using UnityEngine.Scripting;
 using math = Unity.Mathematics.math;
 
 namespace FireEMS.Systems
@@ -158,6 +160,11 @@ namespace FireEMS.Systems
             public NativeQueue<FireEMSAction>.ParallelWriter          m_ActionQueue;
             public HealthcareVehicleSelectData                        m_VehicleSelectData;
             public uint m_SimulationFrame;
+
+            void IJobChunk.Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 chunkEnabledMask)
+            {
+                Execute(in chunk, unfilteredChunkIndex, useEnabledMask, in chunkEnabledMask);
+            }
 
             public void Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 enabledMask)
             {

@@ -6,6 +6,7 @@ using Game.Pathfind;
 using HarmonyLib;
 using System.Runtime.CompilerServices;
 using Unity.Burst;
+using Unity.Burst.Intrinsics;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
@@ -92,6 +93,11 @@ namespace FireEMS.Patches
             // fails to resolve them; they follow standard CS2 naming patterns.
             public PathTargetSeeker                             m_TargetSeeker;
             [ReadOnly] public NativeList<AmbulanceSetupItem>   m_SetupItems;
+
+            void IJobChunk.Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 chunkEnabledMask)
+            {
+                Execute(in chunk, unfilteredChunkIndex, useEnabledMask, in chunkEnabledMask);
+            }
 
             public void Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 enabledMask)
             {

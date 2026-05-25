@@ -2,7 +2,8 @@
 
 	<PropertyGroup>
 		<Configurations>Debug;Release</Configurations>
-	
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
 		<!--The file where mod information which is required for publishing mod on PDX mods are stored-->
 		<PublishConfigurationPath>Properties\PublishConfiguration.xml</PublishConfigurationPath>
 	</PropertyGroup>
@@ -37,6 +38,9 @@
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="Unity.Entities">
+			<Private>false</Private>
+		</Reference>
+		<Reference Include="Unity.Jobs">
 			<Private>false</Private>
 		</Reference>
 		<Reference Include="Unity.Mathematics">
