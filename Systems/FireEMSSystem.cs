@@ -3,6 +3,7 @@ using GameFireStation = Game.Buildings.FireStation;
 using FireEMS.Components;
 using Game;
 using Game.Buildings;
+using Game.City;
 using Game.Common;
 using Game.Events;
 using Game.Net;
@@ -36,6 +37,7 @@ namespace FireEMS.Systems
         private NativeQueue<FireEMSAction>   m_ActionQueue;
         private TypeHandle                   m_TypeHandle;
         private EntityQuery                  m_StationQuery;
+        private EntityArchetype              m_HandleRequestArchetype;
 
         [Preserve]
         public FireEMSSystem() { }
@@ -67,6 +69,9 @@ namespace FireEMS.Systems
             });
 
             RequireForUpdate(m_StationQuery);
+
+            m_HandleRequestArchetype = EntityManager.CreateArchetype(
+                ComponentType.ReadWrite<HandleRequest>());
 
             m_TypeHandle.__AssignHandles(ref CheckedStateRef);
         }
@@ -109,10 +114,11 @@ namespace FireEMS.Systems
                 m_TargetData            = m_TypeHandle.__Game_Common_Target_RO_ComponentLookup,
                 m_HealthcareRequestData = m_TypeHandle.__Game_Simulation_HealthcareRequest_RO_ComponentLookup,
                 m_OwnerData             = m_TypeHandle.__Game_Objects_Owner_RO_ComponentLookup,
-                m_CommandBuffer         = parallelEcb,
-                m_ActionQueue           = m_ActionQueue.AsParallelWriter(),
-                m_VehicleSelectData     = m_VehicleSelectData,
-                m_Random                = new Random((uint)(m_SimulationSystem.frameIndex + 1)),
+                m_CommandBuffer              = parallelEcb,
+                m_ActionQueue                = m_ActionQueue.AsParallelWriter(),
+                m_VehicleSelectData          = m_VehicleSelectData,
+                m_Random                     = new Random((uint)(m_SimulationSystem.frameIndex + 1)),
+                m_HandleRequestArchetype     = m_HandleRequestArchetype,
             };
 
             JobHandle tickHandle = tickJob.ScheduleParallel(
@@ -173,18 +179,14 @@ namespace FireEMS.Systems
             public NativeQueue<FireEMSAction>.ParallelWriter             m_ActionQueue;
             public HealthcareVehicleSelectData                           m_VehicleSelectData;
             public Random                                                m_Random;
+            public EntityArchetype                                       m_HandleRequestArchetype;
 
             void IJobChunk.Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 chunkEnabledMask)
             {
                 Execute(in chunk, unfilteredChunkIndex, useEnabledMask, in chunkEnabledMask);
             }
 
-            void IJobChunk.Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 chunkEnabledMask)
-            {
-                Execute(in chunk, unfilteredChunkIndex, useEnabledMask, in chunkEnabledMask);
-            }
-
-            public void Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 enabledMask)
+            private void Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 enabledMask)
             {
                 NativeArray<Entity>                entities         = chunk.GetNativeArray(m_EntityType);
                 NativeArray<Game.Objects.Transform> transforms      = chunk.GetNativeArray(ref m_TransformType);
@@ -234,7 +236,7 @@ namespace FireEMS.Systems
                         dispatched++;
 
                         GameAmbulance ambulance = m_AmbulanceData[ambulanceEntity];
-                        ambulance.m_Flags |= AmbulanceFlags.Dispatched | AmbulanceFlags.AnyHospital;
+                        ambulance.m_State |= AmbulanceFlags.Dispatched | AmbulanceFlags.AnyHospital;
                         m_CommandBuffer.SetComponent(unfilteredChunkIndex, ambulanceEntity, ambulance);
 
                         m_CommandBuffer.SetComponent(unfilteredChunkIndex, ambulanceEntity, new Target
@@ -263,7 +265,7 @@ namespace FireEMS.Systems
                             continue;
                         }
 
-                        m_VehicleSelectData.CreateVehicle(
+                        Entity newVehicle = m_VehicleSelectData.CreateVehicle(
                             m_CommandBuffer,
                             unfilteredChunkIndex,
                             ref m_Random,
@@ -273,6 +275,39 @@ namespace FireEMS.Systems
                             HealthcareRequestType.Ambulance,
                             RoadTypes.Car,
                             false);
+
+                        if (newVehicle == Entity.Null)
+                            break;
+
+                        HealthcareRequest healthcareRequest = m_HealthcareRequestData[requestEntity];
+                        Entity targetLocation = requestEntity;
+
+                        m_CommandBuffer.AddComponent(unfilteredChunkIndex, newVehicle,
+                            new Owner(stationEntity));
+
+                        m_CommandBuffer.SetComponent(unfilteredChunkIndex, newVehicle,
+                            new GameAmbulance(
+                                healthcareRequest.m_Citizen,
+                                targetLocation,
+                                AmbulanceFlags.Dispatched | AmbulanceFlags.AnyHospital));
+
+                        m_CommandBuffer.SetComponent(unfilteredChunkIndex, newVehicle,
+                            new Target(targetLocation));
+
+                        m_CommandBuffer.SetBuffer<ServiceDispatch>(unfilteredChunkIndex, newVehicle)
+                            .Add(new ServiceDispatch(requestEntity));
+
+                        Entity handleEntity = m_CommandBuffer.CreateEntity(unfilteredChunkIndex, m_HandleRequestArchetype);
+                        m_CommandBuffer.SetComponent(unfilteredChunkIndex, handleEntity,
+                            new HandleRequest(requestEntity, newVehicle, completed: false));
+
+                        if (emsData.m_TargetRequest != Entity.Null &&
+                            m_HealthcareRequestData.HasComponent(emsData.m_TargetRequest))
+                        {
+                            Entity closeEntity = m_CommandBuffer.CreateEntity(unfilteredChunkIndex, m_HandleRequestArchetype);
+                            m_CommandBuffer.SetComponent(unfilteredChunkIndex, closeEntity,
+                                new HandleRequest(emsData.m_TargetRequest, Entity.Null, completed: true));
+                        }
 
                         dispatches.RemoveAt(j);
                     }
