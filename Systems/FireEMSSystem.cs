@@ -1,11 +1,15 @@
+using GameAmbulance = Game.Vehicles.Ambulance;
+using GameFireStation = Game.Buildings.FireStation;
 using FireEMS.Components;
 using Game;
 using Game.Buildings;
 using Game.Common;
 using Game.Events;
+using Game.Net;
 using Game.Objects;
 using Game.Prefabs;
 using Game.Simulation;
+using Game.Tools;
 using Game.Vehicles;
 using System.Runtime.CompilerServices;
 using Unity.Burst;
@@ -13,6 +17,7 @@ using Unity.Burst.Intrinsics;
 using Unity.Collections;
 using Unity.Entities;
 using Unity.Jobs;
+using Unity.Mathematics;
 using UnityEngine.Scripting;
 using math = Unity.Mathematics.math;
 
@@ -24,8 +29,9 @@ namespace FireEMS.Systems
         private const uint k_UpdateInterval = 256u;
         private const uint k_UpdateOffset   = 32u;
 
-        private SimulationSystem              m_SimulationSystem;
+        private SimulationSystem             m_SimulationSystem;
         private EndFrameBarrier              m_EndFrameBarrier;
+        private CityConfigurationSystem      m_CityConfigurationSystem;
         private HealthcareVehicleSelectData  m_VehicleSelectData;
         private NativeQueue<FireEMSAction>   m_ActionQueue;
         private TypeHandle                   m_TypeHandle;
@@ -39,16 +45,17 @@ namespace FireEMS.Systems
         {
             base.OnCreate();
 
-            m_SimulationSystem = World.GetOrCreateSystemManaged<SimulationSystem>();
-            m_EndFrameBarrier  = World.GetOrCreateSystemManaged<EndFrameBarrier>();
-            m_VehicleSelectData = new HealthcareVehicleSelectData(this);
-            m_ActionQueue = new NativeQueue<FireEMSAction>(Allocator.Persistent);
+            m_SimulationSystem        = World.GetOrCreateSystemManaged<SimulationSystem>();
+            m_EndFrameBarrier         = World.GetOrCreateSystemManaged<EndFrameBarrier>();
+            m_CityConfigurationSystem = World.GetOrCreateSystemManaged<CityConfigurationSystem>();
+            m_VehicleSelectData       = new HealthcareVehicleSelectData(this);
+            m_ActionQueue             = new NativeQueue<FireEMSAction>(Allocator.Persistent);
 
             m_StationQuery = GetEntityQuery(new EntityQueryDesc
             {
                 All  = new[]
                 {
-                    ComponentType.ReadOnly<FireStation>(),
+                    ComponentType.ReadOnly<GameFireStation>(),
                     ComponentType.ReadWrite<FireEMSData>(),
                     ComponentType.ReadWrite<ServiceDispatch>(),
                 },
@@ -78,46 +85,52 @@ namespace FireEMS.Systems
             m_TypeHandle.__Game_Vehicles_Ambulance_RO_ComponentLookup.Update(ref CheckedStateRef);
             m_TypeHandle.__Game_Vehicles_ParkedCar_RO_ComponentLookup.Update(ref CheckedStateRef);
             m_TypeHandle.__Game_Common_Target_RO_ComponentLookup.Update(ref CheckedStateRef);
-            m_TypeHandle.__Game_Healthcare_HealthcareRequest_RO_ComponentLookup.Update(ref CheckedStateRef);
+            m_TypeHandle.__Game_Simulation_HealthcareRequest_RO_ComponentLookup.Update(ref CheckedStateRef);
             m_TypeHandle.__Game_Objects_Owner_RO_ComponentLookup.Update(ref CheckedStateRef);
 
-            m_VehicleSelectData.PreUpdate(this, Dependency, out JobHandle selectPreHandle);
+            m_VehicleSelectData.PreUpdate(
+                this,
+                m_CityConfigurationSystem,
+                m_StationQuery,
+                Allocator.TempJob,
+                out JobHandle selectPreHandle);
 
             EntityCommandBuffer.ParallelWriter parallelEcb = m_EndFrameBarrier.CreateCommandBuffer().AsParallelWriter();
 
             var tickJob = new FireEMSTickJob
             {
-                m_EntityType                = m_TypeHandle.__Unity_Entities_Entity_TypeHandle,
-                m_TransformType             = m_TypeHandle.__Game_Objects_Transform_RO_ComponentTypeHandle,
-                m_FireEMSDataType           = m_TypeHandle.__FireEMS_Components_FireEMSData_RW_ComponentTypeHandle,
-                m_OwnedVehicleType          = m_TypeHandle.__Game_Objects_OwnedVehicle_RO_BufferTypeHandle,
-                m_ServiceDispatchType       = m_TypeHandle.__Game_Buildings_ServiceDispatch_RW_BufferTypeHandle,
-                m_AmbulanceData             = m_TypeHandle.__Game_Vehicles_Ambulance_RO_ComponentLookup,
-                m_ParkedCarData             = m_TypeHandle.__Game_Vehicles_ParkedCar_RO_ComponentLookup,
-                m_TargetData                = m_TypeHandle.__Game_Common_Target_RO_ComponentLookup,
-                m_HealthcareRequestData     = m_TypeHandle.__Game_Healthcare_HealthcareRequest_RO_ComponentLookup,
-                m_OwnerData                 = m_TypeHandle.__Game_Objects_Owner_RO_ComponentLookup,
-                m_CommandBuffer             = parallelEcb,
-                m_ActionQueue               = m_ActionQueue.AsParallelWriter(),
-                m_VehicleSelectData         = m_VehicleSelectData,
-                m_SimulationFrame           = m_SimulationSystem.frameIndex,
+                m_EntityType            = m_TypeHandle.__Unity_Entities_Entity_TypeHandle,
+                m_TransformType         = m_TypeHandle.__Game_Objects_Transform_RO_ComponentTypeHandle,
+                m_FireEMSDataType       = m_TypeHandle.__FireEMS_Components_FireEMSData_RW_ComponentTypeHandle,
+                m_OwnedVehicleType      = m_TypeHandle.__Game_Objects_OwnedVehicle_RO_BufferTypeHandle,
+                m_ServiceDispatchType   = m_TypeHandle.__Game_Buildings_ServiceDispatch_RW_BufferTypeHandle,
+                m_AmbulanceData         = m_TypeHandle.__Game_Vehicles_Ambulance_RO_ComponentLookup,
+                m_ParkedCarData         = m_TypeHandle.__Game_Vehicles_ParkedCar_RO_ComponentLookup,
+                m_TargetData            = m_TypeHandle.__Game_Common_Target_RO_ComponentLookup,
+                m_HealthcareRequestData = m_TypeHandle.__Game_Simulation_HealthcareRequest_RO_ComponentLookup,
+                m_OwnerData             = m_TypeHandle.__Game_Objects_Owner_RO_ComponentLookup,
+                m_CommandBuffer         = parallelEcb,
+                m_ActionQueue           = m_ActionQueue.AsParallelWriter(),
+                m_VehicleSelectData     = m_VehicleSelectData,
+                m_Random                = new Random((uint)(m_SimulationSystem.frameIndex + 1)),
             };
 
-            JobHandle tickHandle = tickJob.ScheduleParallel(m_StationQuery, JobHandle.CombineDependencies(Dependency, selectPreHandle));
+            JobHandle tickHandle = tickJob.ScheduleParallel(
+                m_StationQuery,
+                JobHandle.CombineDependencies(Dependency, selectPreHandle));
 
-            m_VehicleSelectData.PostUpdate(this, tickHandle, out JobHandle selectPostHandle);
+            m_VehicleSelectData.PostUpdate(tickHandle);
 
-            // Non-parallel ECB for the action drain job (structural changes only, from queue).
             EntityCommandBuffer actionEcb = m_EndFrameBarrier.CreateCommandBuffer();
 
             var actionJob = new FireEMSActionJob
             {
-                m_ActionQueue  = m_ActionQueue,
+                m_ActionQueue   = m_ActionQueue,
                 m_CommandBuffer = actionEcb,
                 m_AmbulanceData = m_TypeHandle.__Game_Vehicles_Ambulance_RO_ComponentLookup,
             };
 
-            JobHandle actionHandle = actionJob.Schedule(JobHandle.CombineDependencies(tickHandle, selectPostHandle));
+            JobHandle actionHandle = actionJob.Schedule(tickHandle);
             m_EndFrameBarrier.AddJobHandleForProducer(actionHandle);
 
             Dependency = actionHandle;
@@ -144,22 +157,22 @@ namespace FireEMS.Systems
         [BurstCompile]
         private unsafe struct FireEMSTickJob : IJobChunk
         {
-            [ReadOnly] public EntityTypeHandle                       m_EntityType;
+            [ReadOnly] public EntityTypeHandle                           m_EntityType;
             [ReadOnly] public ComponentTypeHandle<Game.Objects.Transform> m_TransformType;
-            public ComponentTypeHandle<FireEMSData>                   m_FireEMSDataType;
-            [ReadOnly] public BufferTypeHandle<OwnedVehicle>          m_OwnedVehicleType;
-            public BufferTypeHandle<ServiceDispatch>                   m_ServiceDispatchType;
+            public ComponentTypeHandle<FireEMSData>                      m_FireEMSDataType;
+            [ReadOnly] public BufferTypeHandle<OwnedVehicle>             m_OwnedVehicleType;
+            public BufferTypeHandle<ServiceDispatch>                      m_ServiceDispatchType;
 
-            [ReadOnly] public ComponentLookup<Ambulance>              m_AmbulanceData;
-            [ReadOnly] public ComponentLookup<ParkedCar>              m_ParkedCarData;
-            [ReadOnly] public ComponentLookup<Target>                 m_TargetData;
-            [ReadOnly] public ComponentLookup<HealthcareRequest>      m_HealthcareRequestData;
-            [ReadOnly] public ComponentLookup<Owner>                  m_OwnerData;
+            [ReadOnly] public ComponentLookup<GameAmbulance>             m_AmbulanceData;
+            [ReadOnly] public ComponentLookup<ParkedCar>                 m_ParkedCarData;
+            [ReadOnly] public ComponentLookup<Target>                    m_TargetData;
+            [ReadOnly] public ComponentLookup<HealthcareRequest>         m_HealthcareRequestData;
+            [ReadOnly] public ComponentLookup<Owner>                     m_OwnerData;
 
-            public EntityCommandBuffer.ParallelWriter                 m_CommandBuffer;
-            public NativeQueue<FireEMSAction>.ParallelWriter          m_ActionQueue;
-            public HealthcareVehicleSelectData                        m_VehicleSelectData;
-            public uint m_SimulationFrame;
+            public EntityCommandBuffer.ParallelWriter                    m_CommandBuffer;
+            public NativeQueue<FireEMSAction>.ParallelWriter             m_ActionQueue;
+            public HealthcareVehicleSelectData                           m_VehicleSelectData;
+            public Random                                                m_Random;
 
             void IJobChunk.Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 chunkEnabledMask)
             {
@@ -168,18 +181,18 @@ namespace FireEMS.Systems
 
             public void Execute(in ArchetypeChunk chunk, int unfilteredChunkIndex, bool useEnabledMask, in v128 enabledMask)
             {
-                NativeArray<Entity>               entities         = chunk.GetNativeArray(m_EntityType);
+                NativeArray<Entity>                entities         = chunk.GetNativeArray(m_EntityType);
                 NativeArray<Game.Objects.Transform> transforms      = chunk.GetNativeArray(ref m_TransformType);
-                NativeArray<FireEMSData>           emsDataArray    = chunk.GetNativeArray(ref m_FireEMSDataType);
-                BufferAccessor<OwnedVehicle>       ownedAccessor   = chunk.GetBufferAccessor(ref m_OwnedVehicleType);
-                BufferAccessor<ServiceDispatch>    dispatchAccessor = chunk.GetBufferAccessor(ref m_ServiceDispatchType);
+                NativeArray<FireEMSData>            emsDataArray    = chunk.GetNativeArray(ref m_FireEMSDataType);
+                BufferAccessor<OwnedVehicle>        ownedAccessor   = chunk.GetBufferAccessor(ref m_OwnedVehicleType);
+                BufferAccessor<ServiceDispatch>     dispatchAccessor = chunk.GetBufferAccessor(ref m_ServiceDispatchType);
 
                 for (int i = 0; i < chunk.Count; i++)
                 {
-                    Entity                        stationEntity    = entities[i];
-                    Game.Objects.Transform        stationTransform = transforms[i];
-                    FireEMSData                   emsData          = emsDataArray[i];
-                    DynamicBuffer<OwnedVehicle>   ownedVehicles    = ownedAccessor[i];
+                    Entity                         stationEntity    = entities[i];
+                    Game.Objects.Transform         stationTransform = transforms[i];
+                    FireEMSData                    emsData          = emsDataArray[i];
+                    DynamicBuffer<OwnedVehicle>    ownedVehicles    = ownedAccessor[i];
                     DynamicBuffer<ServiceDispatch> dispatches       = dispatchAccessor[i];
 
                     // ── Build parked-ambulance list ───────────────────────────
@@ -194,61 +207,48 @@ namespace FireEMS.Systems
                     }
 
                     // ── Trim excess parked ambulances ─────────────────────────
-                    // Vehicles parked beyond capacity are disabled via the action queue.
                     for (int j = emsData.m_AmbulanceCapacity; j < parkedCount; j++)
                     {
                         m_ActionQueue.Enqueue(new FireEMSAction { m_Vehicle = parked[j], m_Enable = false });
                     }
-                    // Clamp available count to capacity.
                     parkedCount = math.min(parkedCount, emsData.m_AmbulanceCapacity);
 
-                    // ── Process service dispatch requests ─────────────────────
+                    // ── Process service dispatch requests via parked units ─────
                     int dispatched = 0;
                     for (int j = dispatches.Length - 1; j >= 0 && dispatched < parkedCount; j--)
                     {
                         Entity requestEntity = dispatches[j].m_Request;
 
-                        // Skip stale/fulfilled requests.
                         if (!m_HealthcareRequestData.HasComponent(requestEntity))
                         {
                             dispatches.RemoveAt(j);
                             continue;
                         }
 
-                        // Pop a parked ambulance.
                         Entity ambulanceEntity = parked[--parkedCount];
                         dispatched++;
 
-                        // ── Set Ambulance flags on the vehicle ────────────────
-                        Ambulance ambulance = m_AmbulanceData[ambulanceEntity];
+                        GameAmbulance ambulance = m_AmbulanceData[ambulanceEntity];
                         ambulance.m_Flags |= AmbulanceFlags.Dispatched | AmbulanceFlags.AnyHospital;
                         m_CommandBuffer.SetComponent(unfilteredChunkIndex, ambulanceEntity, ambulance);
 
-                        // ── Target → the healthcare request entity ─────────────
                         m_CommandBuffer.SetComponent(unfilteredChunkIndex, ambulanceEntity, new Target
                         {
                             m_Target = requestEntity,
                         });
 
-                        // ── Write ServiceDispatch buffer on the vehicle ────────
                         DynamicBuffer<ServiceDispatch> vehicleDispatches =
                             m_CommandBuffer.SetBuffer<ServiceDispatch>(unfilteredChunkIndex, ambulanceEntity);
                         vehicleDispatches.Add(new ServiceDispatch { m_Request = requestEntity });
 
-                        // ── HandleRequest event ───────────────────────────────
                         Entity handleEvent = m_CommandBuffer.CreateEntity(unfilteredChunkIndex);
-                        m_CommandBuffer.AddComponent(unfilteredChunkIndex, handleEvent, new HandleRequest
-                        {
-                            m_Request = requestEntity,
-                            m_Controller = ambulanceEntity,
-                        });
+                        m_CommandBuffer.AddComponent(unfilteredChunkIndex, handleEvent,
+                            new HandleRequest(requestEntity, ambulanceEntity, false));
 
-                        // Remove the fulfilled dispatch entry.
                         dispatches.RemoveAt(j);
                     }
 
-                    // ── Spawn new ambulances via CreateVehicle when queue remains ─
-                    // (fires when parkedCount hit 0 but there are still dispatches)
+                    // ── Spawn new ambulances when no parked units remain ───────
                     for (int j = dispatches.Length - 1; j >= 0; j--)
                     {
                         Entity requestEntity = dispatches[j].m_Request;
@@ -258,43 +258,16 @@ namespace FireEMS.Systems
                             continue;
                         }
 
-                        // CreateVehicle returns the newly spawned entity; Owner + Ambulance
-                        // component + Target are set up here to mirror HospitalAISystem.
-                        Entity newVehicle = m_VehicleSelectData.CreateVehicle(
+                        m_VehicleSelectData.CreateVehicle(
                             m_CommandBuffer,
                             unfilteredChunkIndex,
+                            ref m_Random,
+                            stationTransform,
                             stationEntity,
-                            stationTransform.m_Position,
-                            stationTransform.m_Rotation);
-
-                        if (newVehicle == Entity.Null)
-                            break; // Prefab not resolved this frame; retry next tick.
-
-                        // Owner ties the ambulance back to the fire station.
-                        m_CommandBuffer.SetComponent(unfilteredChunkIndex, newVehicle, new Owner
-                        {
-                            m_Owner = stationEntity,
-                        });
-
-                        Ambulance newAmbulance = default;
-                        newAmbulance.m_Flags = AmbulanceFlags.Dispatched | AmbulanceFlags.AnyHospital;
-                        m_CommandBuffer.AddComponent(unfilteredChunkIndex, newVehicle, newAmbulance);
-
-                        m_CommandBuffer.SetComponent(unfilteredChunkIndex, newVehicle, new Target
-                        {
-                            m_Target = requestEntity,
-                        });
-
-                        DynamicBuffer<ServiceDispatch> newDispatches =
-                            m_CommandBuffer.SetBuffer<ServiceDispatch>(unfilteredChunkIndex, newVehicle);
-                        newDispatches.Add(new ServiceDispatch { m_Request = requestEntity });
-
-                        Entity handleEvent = m_CommandBuffer.CreateEntity(unfilteredChunkIndex);
-                        m_CommandBuffer.AddComponent(unfilteredChunkIndex, handleEvent, new HandleRequest
-                        {
-                            m_Request    = requestEntity,
-                            m_Controller = newVehicle,
-                        });
+                            Entity.Null,
+                            HealthcareRequestType.Ambulance,
+                            RoadTypes.Car,
+                            false);
 
                         dispatches.RemoveAt(j);
                     }
@@ -307,8 +280,6 @@ namespace FireEMS.Systems
                         emsData.m_Flags &= ~FireEMSFlags.HasAvailableAmbulances;
 
                     // ── Reverse HealthcareRequest: advertise availability ──────
-                    // When the station has ambulances and no live outbound request, create one
-                    // so the pathfinding setup jobs can route patients to this station.
                     bool targetLive = emsData.m_TargetRequest != Entity.Null &&
                                       m_HealthcareRequestData.HasComponent(emsData.m_TargetRequest);
 
@@ -317,9 +288,8 @@ namespace FireEMS.Systems
                         Entity reqEntity = m_CommandBuffer.CreateEntity(unfilteredChunkIndex);
                         m_CommandBuffer.AddComponent(unfilteredChunkIndex, reqEntity, new HealthcareRequest
                         {
-                            m_SourceBuilding    = stationEntity,
-                            m_SimulationFrame   = m_SimulationFrame,
-                            m_Capacity          = emsData.m_AvailableAmbulances,
+                            m_Citizen = Entity.Null,
+                            m_Type    = HealthcareRequestType.Ambulance,
                         });
                         emsData.m_TargetRequest = reqEntity;
                     }
@@ -338,9 +308,9 @@ namespace FireEMS.Systems
         [BurstCompile]
         private struct FireEMSActionJob : IJob
         {
-            public NativeQueue<FireEMSAction>             m_ActionQueue;
-            public EntityCommandBuffer                    m_CommandBuffer;
-            [ReadOnly] public ComponentLookup<Ambulance>  m_AmbulanceData;
+            public NativeQueue<FireEMSAction>                m_ActionQueue;
+            public EntityCommandBuffer                       m_CommandBuffer;
+            [ReadOnly] public ComponentLookup<GameAmbulance> m_AmbulanceData;
 
             public void Execute()
             {
@@ -361,15 +331,15 @@ namespace FireEMS.Systems
 
         private struct TypeHandle
         {
-            [ReadOnly] public EntityTypeHandle                           __Unity_Entities_Entity_TypeHandle;
-            [ReadOnly] public ComponentTypeHandle<Game.Objects.Transform>  __Game_Objects_Transform_RO_ComponentTypeHandle;
+            [ReadOnly] public EntityTypeHandle                            __Unity_Entities_Entity_TypeHandle;
+            [ReadOnly] public ComponentTypeHandle<Game.Objects.Transform> __Game_Objects_Transform_RO_ComponentTypeHandle;
             public ComponentTypeHandle<FireEMSData>                       __FireEMS_Components_FireEMSData_RW_ComponentTypeHandle;
             [ReadOnly] public BufferTypeHandle<OwnedVehicle>              __Game_Objects_OwnedVehicle_RO_BufferTypeHandle;
             public BufferTypeHandle<ServiceDispatch>                       __Game_Buildings_ServiceDispatch_RW_BufferTypeHandle;
-            [ReadOnly] public ComponentLookup<Ambulance>                  __Game_Vehicles_Ambulance_RO_ComponentLookup;
+            [ReadOnly] public ComponentLookup<GameAmbulance>              __Game_Vehicles_Ambulance_RO_ComponentLookup;
             [ReadOnly] public ComponentLookup<ParkedCar>                  __Game_Vehicles_ParkedCar_RO_ComponentLookup;
             [ReadOnly] public ComponentLookup<Target>                     __Game_Common_Target_RO_ComponentLookup;
-            [ReadOnly] public ComponentLookup<HealthcareRequest>          __Game_Healthcare_HealthcareRequest_RO_ComponentLookup;
+            [ReadOnly] public ComponentLookup<HealthcareRequest>          __Game_Simulation_HealthcareRequest_RO_ComponentLookup;
             [ReadOnly] public ComponentLookup<Owner>                      __Game_Objects_Owner_RO_ComponentLookup;
 
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -380,10 +350,10 @@ namespace FireEMS.Systems
                 __FireEMS_Components_FireEMSData_RW_ComponentTypeHandle  = state.GetComponentTypeHandle<FireEMSData>(isReadOnly: false);
                 __Game_Objects_OwnedVehicle_RO_BufferTypeHandle          = state.GetBufferTypeHandle<OwnedVehicle>(isReadOnly: true);
                 __Game_Buildings_ServiceDispatch_RW_BufferTypeHandle     = state.GetBufferTypeHandle<ServiceDispatch>(isReadOnly: false);
-                __Game_Vehicles_Ambulance_RO_ComponentLookup             = state.GetComponentLookup<Ambulance>(isReadOnly: true);
+                __Game_Vehicles_Ambulance_RO_ComponentLookup             = state.GetComponentLookup<GameAmbulance>(isReadOnly: true);
                 __Game_Vehicles_ParkedCar_RO_ComponentLookup             = state.GetComponentLookup<ParkedCar>(isReadOnly: true);
                 __Game_Common_Target_RO_ComponentLookup                  = state.GetComponentLookup<Target>(isReadOnly: true);
-                __Game_Healthcare_HealthcareRequest_RO_ComponentLookup   = state.GetComponentLookup<HealthcareRequest>(isReadOnly: true);
+                __Game_Simulation_HealthcareRequest_RO_ComponentLookup   = state.GetComponentLookup<HealthcareRequest>(isReadOnly: true);
                 __Game_Objects_Owner_RO_ComponentLookup                  = state.GetComponentLookup<Owner>(isReadOnly: true);
             }
         }
