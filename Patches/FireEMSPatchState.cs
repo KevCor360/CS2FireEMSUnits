@@ -46,7 +46,7 @@ namespace FireEMS.Patches
                 {
                     ComponentType.ReadOnly<Game.Common.Deleted>(),
                     ComponentType.ReadOnly<Game.Common.Destroyed>(),
-                    ComponentType.ReadOnly<Game.Common.Temp>(),
+                    ComponentType.ReadOnly<Game.Tools.Temp>(),
                 },
             });
 

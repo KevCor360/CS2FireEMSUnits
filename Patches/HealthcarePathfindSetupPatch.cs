@@ -109,14 +109,14 @@ namespace FireEMS.Patches
                         m_SetupData.GetItem(j, out Entity districtEntity, out var targetSeeker);
 
                         if (!AreaUtils.CheckServiceDistrict(
-                                m_ServiceDistricts,
+                                districtEntity,
                                 stationEntity,
-                                districtEntity))
+                                m_ServiceDistricts))
                         {
                             continue;
                         }
 
-                        targetSeeker.FindTargets(stationEntity);
+                        targetSeeker.FindTargets(stationEntity, targetSeeker.m_PathfindParameters.m_Weights.time * 10f);
                     }
                 }
             }

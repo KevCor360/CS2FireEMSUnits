@@ -3,6 +3,7 @@ using Colossal;
 using Colossal.IO.AssetDatabase;
 using Game.Modding;
 using Game.Settings;
+using Game.UI.Localization;
 using Game.UI.Widgets;
 using Unity.Mathematics;
 
@@ -69,9 +70,9 @@ namespace FireEMS.Settings
         {
             return new[]
             {
-                new DropdownItem<DispatchMode> { value = DispatchMode.Combined,  displayName = new LocalizedString("FireEMS.DISPATCH.Combined",  "Combined")   },
-                new DropdownItem<DispatchMode> { value = DispatchMode.FireBased, displayName = new LocalizedString("FireEMS.DISPATCH.FireBased", "Fire-Based")  },
-                new DropdownItem<DispatchMode> { value = DispatchMode.Private,   displayName = new LocalizedString("FireEMS.DISPATCH.Private",   "Private")     },
+                new DropdownItem<DispatchMode> { value = DispatchMode.Combined,  displayName = LocalizedString.IdWithFallback("FireEMS.DISPATCH.Combined",  "Combined")   },
+                new DropdownItem<DispatchMode> { value = DispatchMode.FireBased, displayName = LocalizedString.IdWithFallback("FireEMS.DISPATCH.FireBased", "Fire-Based")  },
+                new DropdownItem<DispatchMode> { value = DispatchMode.Private,   displayName = LocalizedString.IdWithFallback("FireEMS.DISPATCH.Private",   "Private")     },
             };
         }
 
@@ -108,8 +109,8 @@ namespace FireEMS.Settings
             {
                 { m_Settings.GetSettingsLocaleID(),                                               "Fire EMS"                               },
                 { m_Settings.GetOptionTabLocaleID("General"),                                     "General"                                },
-                { m_Settings.GetOptionGroupLocaleID("General", "Dispatch"),                        "Dispatch"                               },
-                { m_Settings.GetOptionGroupLocaleID("General", "Ratio"),                           "Ambulance Ratio"                        },
+                { m_Settings.GetOptionGroupLocaleID("Dispatch"),                                     "Dispatch"                               },
+                { m_Settings.GetOptionGroupLocaleID("Ratio"),                                      "Ambulance Ratio"                        },
                 { m_Settings.GetOptionLabelLocaleID(nameof(FireEMSSettings.EMSDispatchMode)),      "Dispatch Mode"                          },
                 { m_Settings.GetOptionDescLocaleID(nameof(FireEMSSettings.EMSDispatchMode)),       "How ambulance dispatch is routed"       },
                 { m_Settings.GetOptionLabelLocaleID(nameof(FireEMSSettings.UseCustomRatio)),       "Use Custom Ratio"                       },
