@@ -1,5 +1,6 @@
 using FireEMS.Components;
 using Game.Areas;
+using Game.Pathfind;
 using System.Runtime.CompilerServices;
 using Unity.Entities;
 
@@ -20,7 +21,8 @@ namespace FireEMS.Patches
         public static ComponentTypeHandle<FireEMSData> FireEMSDataType;
         public static BufferLookup<ServiceDistrict>  ServiceDistricts;
 
-        private static bool s_Initialized;
+        private static bool                s_Initialized;
+        private static PathfindSetupSystem s_PathfindSetupSystem;
 
         public static void Initialize(World world)
         {
@@ -28,6 +30,8 @@ namespace FireEMS.Patches
                 return;
 
             s_Initialized = true;
+
+            s_PathfindSetupSystem = world.GetOrCreateSystemManaged<PathfindSetupSystem>();
 
             // Query: active fire stations that have ambulances available, excluding
             // entities mid-construction, removal, or already destroyed.
@@ -51,7 +55,7 @@ namespace FireEMS.Patches
         }
 
         // Called at the top of every Harmony postfix that schedules jobs.
-        // system is the HealthcarePathfindSetup instance injected via __instance.
+        // system is the PathfindSetupSystem injected by Harmony via parameter name match.
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void Update(Unity.Entities.SystemBase system)
         {
